@@ -1,0 +1,14 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Local data (if migrating from named volumes later)
+data/
+
+# Logs
+*.log
+
+# Editor / OS
+.DS_Store
+*.swp
