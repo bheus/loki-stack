@@ -1,0 +1,61 @@
+version: '3.8'
+
+services:
+  loki:
+    image: grafana/loki:2.9.3
+    container_name: loki
+    restart: unless-stopped
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./loki/loki-config.yml:/etc/loki/loki-config.yml
+      - loki-data:/loki
+    command: -config.file=/etc/loki/loki-config.yml
+    networks:
+      - loki
+
+  promtail:
+    image: grafana/promtail:3.0.0
+    container_name: promtail
+    restart: unless-stopped
+    # Add systemd-journal group for journal access
+    group_add:
+      - "999"  # systemd-journal GID
+    ports:
+      - "1514:1514/tcp"  # Syslog from routers (TCP) - Tokaido on LAN
+      - "1514:1514/udp"  # Syslog from routers (UDP) - Samarkand on 5G
+    volumes:
+      - ./promtail/promtail-config.yml:/etc/promtail/promtail-config.yml
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/log/journal:/var/log/journal:ro
+      - /run/log/journal:/run/log/journal:ro
+      - /etc/machine-id:/etc/machine-id:ro
+    command: -config.file=/etc/promtail/promtail-config.yml
+    networks:
+      - loki
+
+  grafana:
+    image: grafana/grafana:10.2.3
+    container_name: grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_FEATURE_TOGGLES_ENABLE=publicDashboards
+      - GF_PUBLIC_DASHBOARDS_ENABLED=true
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+    networks:
+      - loki
+
+volumes:
+  loki-data:
+  grafana-data:
+
+networks:
+  loki:
+    driver: bridge
