@@ -9,28 +9,22 @@ clients:
   - url: http://loki:3100/loki/api/v1/push
 
 scrape_configs:
-  # Docker containers
+  # Docker containers (narrowed: only IN nginx + cloudflared tunnel for public-facing observability)
   - job_name: docker
     docker_sd_configs:
       - host: unix:///var/run/docker.sock
         refresh_interval: 5s
-    pipeline_stages:
-      # Drop Loki's context canceled errors to prevent rate limiting
-      - match:
-          selector: '{container="loki"}'
-          stages:
-            - drop:
-                expression: '.*context canceled.*'
+        filters:
+          - name: name
+            values: [invoiceninja-nginx-1, cloudflared-tunnel]
     relabel_configs:
-      - source_labels: ['__meta_docker_container_name']
-        regex: '/(.*)'
-        target_label: 'container'
-      - source_labels: ['__meta_docker_container_log_stream']
-        target_label: 'stream'
-      - source_labels: ['__meta_docker_container_label_com_docker_compose_project']
-        target_label: 'compose_project'
-      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
-        target_label: 'compose_service'
+      - target_label: job
+        replacement: docker
+      - source_labels: [__meta_docker_container_name]
+        regex: /(.*)
+        target_label: container
+      - source_labels: [__meta_docker_container_log_stream]
+        target_label: stream
 
   # System logs from journald
   - job_name: systemd-journal
