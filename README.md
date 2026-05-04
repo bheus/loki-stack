@@ -1,7 +1,7 @@
 # Loki + Grafana Logging Stack
 
 ## Overview
-This stack provides centralized log aggregation and visualization for all Docker containers on apple-pi.
+This stack provides centralized log aggregation and visualization for Docker containers and system logs.
 
 ## Components
 - **Loki** (port 3100): Log aggregation system
@@ -11,14 +11,14 @@ This stack provides centralized log aggregation and visualization for all Docker
 ## Access
 
 ### Grafana Web UI
-- **URL**: http://apple-pi.lan:3000 or http://192.168.1.12:3000
+- **URL**: `http://<docker-host>:3000`
 - **Username**: admin
-- **Password**: admin (change this on first login\!)
+- **Password**: set during your deployment workflow
 
 ## Quick Start
 
 ### 1. Access Grafana
-Open http://apple-pi.lan:3000 in your browser
+Open `http://<docker-host>:3000` in your browser
 
 ### 2. Add Loki Data Source (First Time Only)
 1. Click the menu (☰) → Connections → Data Sources
@@ -37,32 +37,32 @@ Open http://apple-pi.lan:3000 in your browser
 
 ### View all logs from a specific container:
 ```
-{container="abraham-trading"}
+{container="your-app"}
 ```
 
 ### View logs from multiple containers:
 ```
-{container=~"abraham-trading|homebridge|portainer"}
+{container=~"app1|app2|app3"}
 ```
 
 ### Search for errors:
 ```
-{container="abraham-trading"} |~ "(?i)error"
+{container="your-app"} |~ "(?i)error"
 ```
 
 ### Filter by log level:
 ```
-{container="abraham-trading"} | json | level="ERROR"
+{container="your-app"} | json | level="ERROR"
 ```
 
 ### Count errors in last hour:
 ```
-count_over_time({container="abraham-trading"} |~ "(?i)error" [1h])
+count_over_time({container="your-app"} |~ "(?i)error" [1h])
 ```
 
 ### View logs from last 5 minutes:
 ```
-{container="abraham-trading"} [5m]
+{container="your-app"} [5m]
 ```
 
 ## Management
@@ -107,13 +107,13 @@ docker compose restart grafana
 
 ### Promtail Config
 - File: `~/loki-stack/promtail/promtail-config.yml`
-- Automatically discovers all Docker containers
+- Discovers configured Docker containers and system logs
 - Adds labels: container, stream, compose_project, compose_service
 
 ### Grafana Config
 - Storage: `/var/lib/docker/volumes/loki-stack_grafana-data`
 - Admin user: admin
-- Admin password: admin (CHANGE THIS\!)
+- Admin password: configure during setup and store outside the repo
 
 ## Resource Usage
 
@@ -132,7 +132,7 @@ Storage:
 ### Promtail not collecting logs:
 ```bash
 docker logs promtail
-# Should see "added Docker target" messages
+# Should show target discovery and scrape activity
 ```
 
 ### Loki not receiving logs:
@@ -156,7 +156,7 @@ docker exec promtail wget -O- http://loki:3100/ready
 2. Verify containers are running and generating logs
 3. Check Promtail is discovering containers:
    ```bash
-   docker logs promtail | grep "added Docker target"
+   docker logs promtail | grep -i target
    ```
 
 ## Tips
@@ -179,7 +179,7 @@ Promtail automatically adds these labels:
 
 ## Next Steps
 
-1. **Change admin password** in Grafana
+1. **Verify Grafana admin credentials** and store them in your password manager
 2. **Create dashboards** for your most-used queries
 3. **Set up alerts** for errors or important events
 4. **Explore LogQL** - it's very powerful\!
