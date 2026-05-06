@@ -9,14 +9,11 @@ clients:
   - url: http://loki:3100/loki/api/v1/push
 
 scrape_configs:
-  # Docker containers (narrowed: only IN nginx + cloudflared tunnel for public-facing observability)
+  # Docker containers
   - job_name: docker
     docker_sd_configs:
       - host: unix:///var/run/docker.sock
         refresh_interval: 5s
-        filters:
-          - name: name
-            values: [invoiceninja-nginx-1, cloudflared-tunnel]
     relabel_configs:
       - target_label: job
         replacement: docker
@@ -33,7 +30,7 @@ scrape_configs:
       max_age: 12h
       labels:
         job: systemd-journal
-        host: apple-pi
+        host: docker-host
     relabel_configs:
       - source_labels: ['__journal__systemd_unit']
         target_label: 'unit'
@@ -44,7 +41,7 @@ scrape_configs:
       - source_labels: ['__journal_syslog_identifier']
         target_label: 'syslog_identifier'
 
-  # Remote syslog from routers - TCP (for Tokaido on LAN)
+  # Remote syslog - TCP
   - job_name: syslog-tcp
     syslog:
       listen_address: 0.0.0.0:1514
@@ -63,7 +60,7 @@ scrape_configs:
       - source_labels: ['__syslog_message_app_name']
         target_label: 'application'
 
-  # Remote syslog from routers - UDP (for Samarkand on 5G)
+  # Remote syslog - UDP
   - job_name: syslog-udp
     syslog:
       listen_address: 0.0.0.0:1514
