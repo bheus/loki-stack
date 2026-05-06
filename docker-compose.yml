@@ -52,7 +52,9 @@ services:
 
 volumes:
   loki-data:
+    name: loki-stack_loki-data
   grafana-data:
+    name: loki-stack_grafana-data
 
 networks:
   loki:
