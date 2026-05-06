@@ -1,4 +1,4 @@
-version: '3.8'
+name: loki-stack
 
 services:
   loki:
@@ -22,8 +22,8 @@ services:
     group_add:
       - "999"  # systemd-journal GID
     ports:
-      - "1514:1514/tcp"  # Syslog from routers (TCP) - Tokaido on LAN
-      - "1514:1514/udp"  # Syslog from routers (UDP) - Samarkand on 5G
+      - "1514:1514/tcp"  # Remote syslog over TCP
+      - "1514:1514/udp"  # Remote syslog over UDP
     volumes:
       - ./promtail/promtail-config.yml:/etc/promtail/promtail-config.yml
       - /var/run/docker.sock:/var/run/docker.sock
