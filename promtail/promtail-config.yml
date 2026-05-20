@@ -30,7 +30,7 @@ scrape_configs:
       max_age: 12h
       labels:
         job: systemd-journal
-        host: docker-host
+        host: apple-pi
     relabel_configs:
       - source_labels: ['__journal__systemd_unit']
         target_label: 'unit'
@@ -59,6 +59,19 @@ scrape_configs:
         target_label: 'facility'
       - source_labels: ['__syslog_message_app_name']
         target_label: 'application'
+      # Dual-write APP-NAME as syslog_identifier so router and journald
+      # streams can be filtered with the same label.
+      - source_labels: ['__syslog_message_app_name']
+        target_label: 'syslog_identifier'
+    pipeline_stages:
+      # hostapd emits a continuous stream of SMPS power-save mode changes
+      # from clients (one device alone produced thousands/day). Pure noise.
+      - match:
+          selector: '{application="hostapd"}'
+          stages:
+            - drop:
+                expression: '.*STA-OPMODE-SMPS-MODE-CHANGED.*'
+                drop_counter_reason: hostapd_smps_noise
 
   # Remote syslog - UDP
   - job_name: syslog-udp
@@ -78,3 +91,12 @@ scrape_configs:
         target_label: 'facility'
       - source_labels: ['__syslog_message_app_name']
         target_label: 'application'
+      - source_labels: ['__syslog_message_app_name']
+        target_label: 'syslog_identifier'
+    pipeline_stages:
+      - match:
+          selector: '{application="hostapd"}'
+          stages:
+            - drop:
+                expression: '.*STA-OPMODE-SMPS-MODE-CHANGED.*'
+                drop_counter_reason: hostapd_smps_noise
