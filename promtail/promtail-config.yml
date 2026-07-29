@@ -34,15 +34,27 @@ scrape_configs:
       # plain-text lines. Levels are enumerated rather than captured as \w+ so
       # an unexpected value cannot mint a new label value; a line declaring no
       # level gets no label at all.
+      #
+      # zerolog's console format (Portainer, and other Go services) writes the
+      # level as a bare abbreviation in a fixed position, often wrapped in ANSI
+      # colour: "<ts> \e[31mWRN\e[0m <caller> > <msg>". Anchor to the start of
+      # the line rather than accepting the token anywhere — a bare "ERR" in
+      # prose or a URL path would otherwise stamp a severity on an unrelated
+      # line, which hides real errors as readily as it invents them.
+      - regex:
+          expression: '^(?:\x1b\[[0-9;]*m)?[0-9/:.\- TZAPM]*(?:\x1b\[0m)?\s*(?:\x1b\[[0-9;]*m)?(?P<level>TRC|DBG|INF|WRN|ERR|FTL|PNC)(?:\x1b\[0m)?\s'
+      # An explicit key=value level below outranks the positional guess above.
       - regex:
           expression: '(?i)"(?:level|levelname|severity)"\s*:\s*"(?P<level>trace|debug|info|warn|warning|error|fatal|panic|critical)"'
       - regex:
           expression: '(?i)(?:^|\s)(?:level|severity|lvl)="?(?P<level>trace|debug|info|warn|warning|error|fatal|panic|critical)\b'
-      # Match the lowercase values journald and syslog produce, so one level
-      # value means one stream regardless of which job shipped the line.
+      # Expand the abbreviations and match the lowercase values journald and
+      # syslog produce, so one level means one stream regardless of which job
+      # shipped the line or which spelling the service used.
       - template:
           source: level
-          template: '{{ ToLower .Value }}'
+          template: >-
+            {{ if eq .Value "TRC" }}trace{{ else if eq .Value "DBG" }}debug{{ else if eq .Value "INF" }}info{{ else if eq .Value "WRN" }}warning{{ else if eq .Value "ERR" }}error{{ else if eq .Value "FTL" }}fatal{{ else if eq .Value "PNC" }}fatal{{ else }}{{ ToLower .Value }}{{ end }}
       - labels:
           level:
 
