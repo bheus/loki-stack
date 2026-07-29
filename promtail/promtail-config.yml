@@ -22,6 +22,29 @@ scrape_configs:
         target_label: container
       - source_labels: [__meta_docker_container_log_stream]
         target_label: stream
+    pipeline_stages:
+      # Docker service discovery carries no severity, unlike the journal and
+      # syslog jobs below which get one from the transport. Without a level
+      # label, consumers fall back to scanning the line for words like "error"
+      # and misread an info line that reports "(0 errors)" as a failure.
+      #
+      # Containers here log in a mix of JSON, logfmt and plain text. A regex
+      # stage that finds no match leaves the line untouched, so one pipeline
+      # covers every format without the parse errors a json stage would emit on
+      # plain-text lines. Levels are enumerated rather than captured as \w+ so
+      # an unexpected value cannot mint a new label value; a line declaring no
+      # level gets no label at all.
+      - regex:
+          expression: '(?i)"(?:level|levelname|severity)"\s*:\s*"(?P<level>trace|debug|info|warn|warning|error|fatal|panic|critical)"'
+      - regex:
+          expression: '(?i)(?:^|\s)(?:level|severity|lvl)="?(?P<level>trace|debug|info|warn|warning|error|fatal|panic|critical)\b'
+      # Match the lowercase values journald and syslog produce, so one level
+      # value means one stream regardless of which job shipped the line.
+      - template:
+          source: level
+          template: '{{ ToLower .Value }}'
+      - labels:
+          level:
 
   # System logs from journald
   - job_name: systemd-journal
