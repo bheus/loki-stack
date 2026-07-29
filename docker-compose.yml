@@ -31,6 +31,8 @@ services:
       - /var/log/journal:/var/log/journal:ro
       - /run/log/journal:/run/log/journal:ro
       - /etc/machine-id:/etc/machine-id:ro
+      # Read positions must outlive the container — see promtail-config.yml.
+      - promtail-positions:/positions
     command: -config.file=/etc/promtail/promtail-config.yml
     networks:
       - loki
@@ -55,6 +57,8 @@ volumes:
     name: loki-stack_loki-data
   grafana-data:
     name: loki-stack_grafana-data
+  promtail-positions:
+    name: loki-stack_promtail-positions
 
 networks:
   loki:

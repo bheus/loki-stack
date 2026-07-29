@@ -3,7 +3,12 @@ server:
   grpc_listen_port: 0
 
 positions:
-  filename: /tmp/positions.yaml
+  # On a named volume, not the container filesystem. Losing this file makes
+  # promtail re-read every container log from the start, which republishes
+  # entries that are already in Loki — and since the pipeline now attaches a
+  # level label, the replayed copies land in a different stream and cannot be
+  # deduplicated. Any recreate of this container would otherwise do that.
+  filename: /positions/positions.yaml
 
 clients:
   - url: http://loki:3100/loki/api/v1/push
