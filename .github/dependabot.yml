@@ -1,0 +1,14 @@
+version: 2
+updates:
+  - package-ecosystem: "docker-compose"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "sunday"
+    commit-message:
+      prefix: "deps"
+    # loki, promtail and grafana move together here — group them into one PR
+    # instead of three, since they're upgraded as a set.
+    groups:
+      loki-stack:
+        patterns: ["*"]
