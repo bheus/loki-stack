@@ -175,12 +175,11 @@ either order.
 timestamp, so old data keeps being read through boltdb-shipper/v11 and only new
 writes go to TSDB/v13. **Schema changes cannot be rolled back.**
 
-**Step 1 (this change):** the TSDB/v13 period is dated `2026-08-12`, and
-`allow_structured_metadata` stays `false`. Deploy and restart Loki whenever you
-like — nothing changes until the cutover date.
+**Step 1 (done):** the TSDB/v13 period is dated `2026-08-12`, with
+`allow_structured_metadata` left `false` so nothing changed until that date.
 
-**Step 2 (on or after 2026-08-12 UTC):** set `allow_structured_metadata: true`
-in `limits_config` and restart Loki.
+**Step 2 (done):** `allow_structured_metadata: true`, merged on or after
+2026-08-12 UTC.
 
 The order matters. Loki validates `allow_structured_metadata` against the schema
 period active *at that moment*, not the newest one in the list, so enabling it
