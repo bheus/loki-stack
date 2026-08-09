@@ -1,0 +1,226 @@
+// Alloy replacement for the previous Promtail pipeline. Every label this
+// produces matches what Promtail produced, so existing dashboards and LogQL
+// queries keep working across the cutover.
+
+logging {
+	level  = "info"
+	format = "logfmt"
+}
+
+loki.write "default" {
+	endpoint {
+		url = "http://loki:3100/loki/api/v1/push"
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Docker containers
+// ---------------------------------------------------------------------------
+
+discovery.docker "containers" {
+	host             = "unix:///var/run/docker.sock"
+	refresh_interval = "5s"
+}
+
+discovery.relabel "containers" {
+	targets = discovery.docker.containers.targets
+
+	rule {
+		target_label = "job"
+		replacement  = "docker"
+	}
+
+	rule {
+		source_labels = ["__meta_docker_container_name"]
+		regex         = "/(.*)"
+		target_label  = "container"
+	}
+
+	// stdout/stderr is not a service-discovery label — loki.source.docker stamps
+	// __meta_docker_container_log_stream on each entry as it reads it. This rule
+	// is a no-op during discovery and only does its work when the same rule set
+	// is reapplied at read time via relabel_rules below.
+	rule {
+		source_labels = ["__meta_docker_container_log_stream"]
+		target_label  = "stream"
+	}
+}
+
+loki.source.docker "containers" {
+	host    = "unix:///var/run/docker.sock"
+	targets = discovery.relabel.containers.output
+	// Reapplying the discovery rules is idempotent for job/container and is the
+	// only place the stream rule can see its source label.
+	relabel_rules = discovery.relabel.containers.rules
+	forward_to    = [loki.process.docker.receiver]
+}
+
+loki.process "docker" {
+	forward_to = [loki.write.default.receiver]
+
+	// Docker service discovery carries no severity, unlike the journal and
+	// syslog sources below which get one from the transport. Without a level
+	// label, consumers fall back to scanning the line for words like "error"
+	// and misread an info line that reports "(0 errors)" as a failure.
+	//
+	// Containers here log in a mix of JSON, logfmt and plain text. A regex
+	// stage that finds no match leaves the line untouched, so one pipeline
+	// covers every format without the parse errors a json stage would emit on
+	// plain-text lines. Levels are enumerated rather than captured as \w+ so
+	// an unexpected value cannot mint a new label value; a line declaring no
+	// level gets no label at all.
+	//
+	// zerolog's console format (Portainer, and other Go services) writes the
+	// level as a bare abbreviation in a fixed position, often wrapped in ANSI
+	// colour: "<ts> \e[31mWRN\e[0m <caller> > <msg>". Anchor to the start of
+	// the line rather than accepting the token anywhere — a bare "ERR" in
+	// prose or a URL path would otherwise stamp a severity on an unrelated
+	// line, which hides real errors as readily as it invents them.
+	//
+	// Expressions are raw strings (backticks) so the regex escapes reach RE2
+	// intact; a double-quoted Alloy string would reject \s and \x1b as invalid
+	// escape sequences.
+	stage.regex {
+		expression = `^(?:\x1b\[[0-9;]*m)?[0-9/:.\- TZAPM]*(?:\x1b\[0m)?\s*(?:\x1b\[[0-9;]*m)?(?P<level>TRC|DBG|INF|WRN|ERR|FTL|PNC)(?:\x1b\[0m)?\s`
+	}
+
+	// An explicit key=value level below outranks the positional guess above.
+	stage.regex {
+		expression = `(?i)"(?:level|levelname|severity)"\s*:\s*"(?P<level>trace|debug|info|warn|warning|error|fatal|panic|critical)"`
+	}
+
+	stage.regex {
+		expression = `(?i)(?:^|\s)(?:level|severity|lvl)="?(?P<level>trace|debug|info|warn|warning|error|fatal|panic|critical)\b`
+	}
+
+	// Expand the abbreviations and match the lowercase values journald and
+	// syslog produce, so one level means one stream regardless of which source
+	// shipped the line or which spelling the service used.
+	stage.template {
+		source   = "level"
+		template = `{{ if eq .Value "TRC" }}trace{{ else if eq .Value "DBG" }}debug{{ else if eq .Value "INF" }}info{{ else if eq .Value "WRN" }}warning{{ else if eq .Value "ERR" }}error{{ else if eq .Value "FTL" }}fatal{{ else if eq .Value "PNC" }}fatal{{ else }}{{ ToLower .Value }}{{ end }}`
+	}
+
+	stage.labels {
+		values = {
+			level = "",
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// System logs from journald
+// ---------------------------------------------------------------------------
+
+// loki.relabel with an empty forward_to exists only to export .rules; the
+// journal and syslog sources consume the rules and do their own forwarding.
+loki.relabel "journal" {
+	forward_to = []
+
+	rule {
+		source_labels = ["__journal__systemd_unit"]
+		target_label  = "unit"
+	}
+
+	rule {
+		source_labels = ["__journal__hostname"]
+		target_label  = "hostname"
+	}
+
+	rule {
+		source_labels = ["__journal_priority_keyword"]
+		target_label  = "level"
+	}
+
+	rule {
+		source_labels = ["__journal_syslog_identifier"]
+		target_label  = "syslog_identifier"
+	}
+}
+
+loki.source.journal "system" {
+	path    = "/run/log/journal"
+	max_age = "12h"
+	labels  = {
+		job  = "systemd-journal",
+		host = "apple-pi",
+	}
+	relabel_rules = loki.relabel.journal.rules
+	forward_to    = [loki.write.default.receiver]
+}
+
+// ---------------------------------------------------------------------------
+// Remote syslog from the routers
+// ---------------------------------------------------------------------------
+
+loki.relabel "syslog" {
+	forward_to = []
+
+	rule {
+		source_labels = ["__syslog_message_hostname"]
+		target_label  = "host"
+	}
+
+	rule {
+		source_labels = ["__syslog_message_severity"]
+		target_label  = "level"
+	}
+
+	rule {
+		source_labels = ["__syslog_message_facility"]
+		target_label  = "facility"
+	}
+
+	rule {
+		source_labels = ["__syslog_message_app_name"]
+		target_label  = "application"
+	}
+
+	// Dual-write APP-NAME as syslog_identifier so router and journald
+	// streams can be filtered with the same label.
+	rule {
+		source_labels = ["__syslog_message_app_name"]
+		target_label  = "syslog_identifier"
+	}
+}
+
+// Promtail needed one scrape_config per protocol; Alloy takes both listeners in
+// a single component. The job labels stay split so the streams are unchanged.
+loki.source.syslog "routers" {
+	listener {
+		address               = "0.0.0.0:1514"
+		protocol              = "tcp"
+		idle_timeout          = "60s"
+		label_structured_data = false
+		labels                = {
+			job = "router-syslog-tcp",
+		}
+	}
+
+	listener {
+		address               = "0.0.0.0:1514"
+		protocol              = "udp"
+		label_structured_data = false
+		labels                = {
+			job = "router-syslog-udp",
+		}
+	}
+
+	relabel_rules = loki.relabel.syslog.rules
+	forward_to    = [loki.process.syslog.receiver]
+}
+
+loki.process "syslog" {
+	forward_to = [loki.write.default.receiver]
+
+	// hostapd emits a continuous stream of SMPS power-save mode changes
+	// from clients (one device alone produced thousands/day). Pure noise.
+	stage.match {
+		selector = `{application="hostapd"}`
+
+		stage.drop {
+			expression          = ".*STA-OPMODE-SMPS-MODE-CHANGED.*"
+			drop_counter_reason = "hostapd_smps_noise"
+		}
+	}
+}

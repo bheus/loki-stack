@@ -14,26 +14,34 @@ services:
     networks:
       - loki
 
-  promtail:
-    image: grafana/promtail:3.6.8
-    container_name: promtail
+  alloy:
+    image: grafana/alloy:v1.18.1
+    container_name: alloy
     restart: unless-stopped
     # Add systemd-journal group for journal access
     group_add:
       - "999"  # systemd-journal GID
     ports:
-      - "1514:1514/tcp"  # Remote syslog over TCP
-      - "1514:1514/udp"  # Remote syslog over UDP
+      - "1514:1514/tcp"   # Remote syslog over TCP
+      - "1514:1514/udp"   # Remote syslog over UDP
+      - "12345:12345/tcp" # Alloy UI: live component graph and pipeline debugging
     volumes:
-      - ./promtail/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
+      - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
+      # Alloy reads container logs through the Docker API, so unlike Promtail it
+      # does not need /var/lib/docker/containers bind-mounted.
       - /var/run/docker.sock:/var/run/docker.sock
-      - /var/lib/docker/containers:/var/lib/docker/containers:ro
       - /var/log/journal:/var/log/journal:ro
       - /run/log/journal:/run/log/journal:ro
       - /etc/machine-id:/etc/machine-id:ro
-      # Read positions must outlive the container — see promtail-config.yml.
-      - promtail-positions:/positions
-    command: -config.file=/etc/promtail/promtail-config.yml
+      # Read positions live under the storage path and must outlive the
+      # container. Without them loki.source.docker restarts every container at
+      # Since=0 and republishes its whole retained log to Loki.
+      - alloy-data:/var/lib/alloy/data
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
     networks:
       - loki
 
@@ -57,8 +65,8 @@ volumes:
     name: loki-stack_loki-data
   grafana-data:
     name: loki-stack_grafana-data
-  promtail-positions:
-    name: loki-stack_promtail-positions
+  alloy-data:
+    name: loki-stack_alloy-data
 
 networks:
   loki:

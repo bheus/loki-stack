@@ -5,7 +5,7 @@ This stack provides centralized log aggregation and visualization for Docker con
 
 ## Components
 - **Loki** (port 3100): Log aggregation system
-- **Promtail**: Log collector that ships Docker logs to Loki
+- **Alloy** (ports 1514 syslog, 12345 UI): Log collector that ships Docker, journald and router syslog logs to Loki
 - **Grafana** (port 3000): Web UI for viewing and querying logs
 
 ## Access
@@ -82,19 +82,19 @@ docker compose down
 ### View logs:
 ```bash
 docker logs loki
-docker logs promtail
+docker logs alloy
 docker logs grafana
 ```
 
 ### Check status:
 ```bash
-docker ps | grep -E 'loki|grafana|promtail'
+docker ps | grep -E 'loki|grafana|alloy'
 ```
 
 ### Restart a service:
 ```bash
 docker compose restart loki
-docker compose restart promtail
+docker compose restart alloy
 docker compose restart grafana
 ```
 
@@ -105,10 +105,11 @@ docker compose restart grafana
 - Retention: 30 days (720 hours)
 - Storage: `/var/lib/docker/volumes/loki-stack_loki-data`
 
-### Promtail Config
-- File: `~/loki-stack/promtail/promtail-config.yml`
-- Discovers configured Docker containers and system logs
-- Adds labels: container, stream, compose_project, compose_service
+### Alloy Config
+- File: `~/loki-stack/alloy/config.alloy`
+- Discovers Docker containers over the Docker API, plus journald and remote router syslog
+- Adds labels: container, stream, level, job (see [Labels](#labels))
+- Live pipeline view: `http://<docker-host>:12345`
 
 ### Grafana Config
 - Storage: `/var/lib/docker/volumes/loki-stack_grafana-data`
@@ -119,7 +120,7 @@ docker compose restart grafana
 
 Typical resource usage:
 - **Loki**: ~200-300 MB RAM
-- **Promtail**: ~50-100 MB RAM
+- **Alloy**: ~100-150 MB RAM
 - **Grafana**: ~150-200 MB RAM
 - **Total**: ~400-600 MB RAM
 
@@ -129,19 +130,21 @@ Storage:
 
 ## Troubleshooting
 
-### Promtail not collecting logs:
+### Alloy not collecting logs:
 ```bash
-docker logs promtail
-# Should show target discovery and scrape activity
+docker logs alloy
+# Should show component evaluation and target discovery
 ```
+Open `http://<docker-host>:12345` for the component graph — each component shows
+its health, its current targets and, for `loki.process`, the entries it handled.
 
 ### Loki not receiving logs:
 ```bash
 # Check Loki is running
 curl http://localhost:3100/ready
 
-# Check Promtail can reach Loki
-docker exec promtail wget -O- http://loki:3100/ready
+# Check Alloy can reach Loki
+docker exec alloy wget -O- http://loki:3100/ready
 ```
 
 ### Grafana can't connect to Loki:
@@ -154,10 +157,97 @@ docker exec promtail wget -O- http://loki:3100/ready
 ### No logs showing in Grafana:
 1. Check time range (top right in Explore)
 2. Verify containers are running and generating logs
-3. Check Promtail is discovering containers:
+3. Check Alloy is discovering containers, either in the UI at
+   `http://<docker-host>:12345/component/discovery.docker.containers` or with:
    ```bash
-   docker logs promtail | grep -i target
+   docker logs alloy | grep -i target
    ```
+
+## Migration Runbook
+
+Two migrations land together: the storage schema moves from BoltDB-shipper/v11 to
+TSDB/v13, and Promtail is replaced by Alloy. They are independent — do them in
+either order.
+
+### 1. Storage schema: BoltDB-shipper v11 → TSDB v13
+
+`schema_config` now holds two periods. Loki selects a period by the chunk's
+timestamp, so old data keeps being read through boltdb-shipper/v11 and only new
+writes go to TSDB/v13. **Schema changes cannot be rolled back.**
+
+**Step 1 (this change):** the TSDB/v13 period is dated `2026-08-12`, and
+`allow_structured_metadata` stays `false`. Deploy and restart Loki whenever you
+like — nothing changes until the cutover date.
+
+**Step 2 (on or after 2026-08-12 UTC):** set `allow_structured_metadata: true`
+in `limits_config` and restart Loki.
+
+The order matters. Loki validates `allow_structured_metadata` against the schema
+period active *at that moment*, not the newest one in the list, so enabling it
+before the cutover date makes Loki refuse to start:
+
+```
+CONFIG ERROR: schema v13 is required to store Structured Metadata and use native
+OTLP ingestion, your schema version is v11.
+```
+
+If you deploy later than planned, that is fine — a `from` date in the past just
+means the period is already active. Only move the date *forward*, and remember
+it is read as 00:00:00 UTC: if it is already past UTC midnight of the date you
+pick, that period activates immediately and chunks written earlier that day
+become unreadable.
+
+No storage migration or downtime is needed. TSDB index and cache directories are
+derived from `common.path_prefix`, so they appear under the existing
+`loki-stack_loki-data` volume on first write.
+
+### 2. Promtail → Alloy
+
+Label parity is deliberate: `job`, `container`, `stream`, `level`, `unit`,
+`hostname`, `syslog_identifier`, `host`, `facility` and `application` all keep
+the names and values Promtail produced, so saved queries and dashboards need no
+edits.
+
+```bash
+docker compose up -d --remove-orphans
+```
+
+`--remove-orphans` is what stops the old `promtail` container, since the service
+no longer exists in the compose file.
+
+**Expect a one-time burst of duplicate container logs, roughly one hour deep.**
+Alloy keeps its own read positions under `/var/lib/alloy/data` (the
+`loki-stack_alloy-data` volume) and cannot inherit Promtail's. With no position
+recorded, `loki.source.docker` asks the Docker API for each container's logs
+`since=0` and re-ships everything the host still has on disk.
+
+Almost all of that is rejected on arrival. Loki computes an out-of-order cutoff
+per stream of `highestTs - max_chunk_age/2` (`pkg/ingester/stream.go`), which is
+one hour with the default 2h `max_chunk_age`. Because the labels above are
+unchanged, Alloy writes into the same streams Promtail was filling, whose newest
+entry is from seconds ago — so only the last hour or so per container can land
+as a duplicate. `reject_old_samples_max_age` never becomes the binding limit.
+
+For the first minute or two after cutover, Alloy logs a burst of HTTP 400s from
+Loki reading `entry too far behind, oldest acceptable timestamp is: ...`. That is
+the cutoff doing its job. Loki returns 400 rather than 429, so Alloy drops those
+entries instead of retrying, and the burst stops once each container's tail
+catches up.
+
+Journald and syslog are unaffected: the journal source is capped at
+`max_age = 12h`, and syslog is a live listener with no backlog.
+
+If you ever do need to suppress the duplicates entirely, temporarily lower
+`reject_old_samples_max_age` in `limits_config` (for example `5m`) and restart
+Loki *before* starting Alloy, then remove the override afterwards. Under GitOps
+this costs two extra merges and briefly drops journald backlog, so it is rarely
+worth it.
+
+Once you are satisfied with the cutover, the old positions volume can go:
+
+```bash
+docker volume rm loki-stack_promtail-positions
+```
 
 ## Tips
 
@@ -171,11 +261,16 @@ Click "Add to dashboard" to save useful queries
 You can set up alerts in Grafana for specific log patterns
 
 ### Labels
-Promtail automatically adds these labels:
-- `container`: Container name
-- `stream`: stdout or stderr
-- `compose_project`: Docker Compose project name
-- `compose_service`: Docker Compose service name
+Alloy adds these labels:
+
+| Label | Sources | Notes |
+|---|---|---|
+| `job` | all | `docker`, `systemd-journal`, `router-syslog-tcp`, `router-syslog-udp` |
+| `container` | docker | Container name |
+| `stream` | docker | stdout or stderr |
+| `level` | all | Normalized to lowercase `trace`/`debug`/`info`/`warning`/`error`/`fatal`. Absent when a container line declares no level. |
+| `unit`, `hostname`, `syslog_identifier` | journald | |
+| `host`, `facility`, `application`, `syslog_identifier` | router syslog | |
 
 ## Next Steps
 
