@@ -93,12 +93,18 @@ loki.process "docker" {
 		expression = `(?i)(?:^|\s)(?:level|severity|lvl)="?(?P<level>trace|debug|info|warn|warning|error|fatal|panic|critical)\b`
 	}
 
-	// Expand the abbreviations and match the lowercase values journald and
-	// syslog produce, so one level means one stream regardless of which source
-	// shipped the line or which spelling the service used.
+	// Fold every spelling of a level onto one canonical value, so a level means
+	// one stream no matter which source shipped the line. Two things happen here:
+	// the zerolog abbreviations expand, and the long/short spellings of the same
+	// level collapse. `warn` and `warning` both reach this stage from the regexes
+	// above — WRN expands to `warning` while logfmt's `level=warn` stays `warn` —
+	// and splitting one severity across two label values is exactly what the
+	// level label exists to prevent. The canonical set is shared with the journal
+	// and syslog relabel rules below: trace, debug, info, notice, warning, error,
+	// critical, alert, emergency, fatal.
 	stage.template {
 		source   = "level"
-		template = `{{ if eq .Value "TRC" }}trace{{ else if eq .Value "DBG" }}debug{{ else if eq .Value "INF" }}info{{ else if eq .Value "WRN" }}warning{{ else if eq .Value "ERR" }}error{{ else if eq .Value "FTL" }}fatal{{ else if eq .Value "PNC" }}fatal{{ else }}{{ ToLower .Value }}{{ end }}`
+		template = `{{ $v := ToLower .Value }}{{ if eq $v "trc" }}trace{{ else if eq $v "dbg" }}debug{{ else if eq $v "inf" }}info{{ else if eq $v "wrn" }}warning{{ else if eq $v "warn" }}warning{{ else if eq $v "err" }}error{{ else if eq $v "ftl" }}fatal{{ else if eq $v "pnc" }}fatal{{ else if eq $v "panic" }}fatal{{ else if eq $v "crit" }}critical{{ else if eq $v "emerg" }}emergency{{ else }}{{ $v }}{{ end }}`
 	}
 
 	stage.labels {
@@ -127,9 +133,34 @@ loki.relabel "journal" {
 		target_label  = "hostname"
 	}
 
+	// journald's priority keywords are emerg/alert/crit/err/warning/notice/info/
+	// debug. Three of those are short spellings of levels the other sources spell
+	// out, so rewrite them onto the canonical set. The passthrough rule comes
+	// first and the specific ones override it — later rules win.
 	rule {
 		source_labels = ["__journal_priority_keyword"]
 		target_label  = "level"
+	}
+
+	rule {
+		source_labels = ["__journal_priority_keyword"]
+		regex         = "err"
+		target_label  = "level"
+		replacement   = "error"
+	}
+
+	rule {
+		source_labels = ["__journal_priority_keyword"]
+		regex         = "crit"
+		target_label  = "level"
+		replacement   = "critical"
+	}
+
+	rule {
+		source_labels = ["__journal_priority_keyword"]
+		regex         = "emerg"
+		target_label  = "level"
+		replacement   = "emergency"
 	}
 
 	rule {
@@ -161,9 +192,18 @@ loki.relabel "syslog" {
 		target_label  = "host"
 	}
 
+	// Syslog severities already match the canonical set apart from
+	// "informational", which every other source spells "info".
 	rule {
 		source_labels = ["__syslog_message_severity"]
 		target_label  = "level"
+	}
+
+	rule {
+		source_labels = ["__syslog_message_severity"]
+		regex         = "informational"
+		target_label  = "level"
+		replacement   = "info"
 	}
 
 	rule {

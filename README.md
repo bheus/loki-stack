@@ -268,7 +268,7 @@ Alloy adds these labels:
 | `job` | all | `docker`, `systemd-journal`, `router-syslog-tcp`, `router-syslog-udp` |
 | `container` | docker | Container name |
 | `stream` | docker | stdout or stderr |
-| `level` | all | Normalized to lowercase `trace`/`debug`/`info`/`warning`/`error`/`fatal`. Absent when a container line declares no level. |
+| `level` | all | Normalized to one canonical lowercase set: `trace`, `debug`, `info`, `notice`, `warning`, `error`, `critical`, `alert`, `emergency`, `fatal`. Spelling variants are folded in — `warn`→`warning`, `informational`→`info`, `err`→`error`, `crit`→`critical`, `emerg`→`emergency`, `panic`→`fatal` — so one severity is always one label value regardless of source. Absent when a container line declares no level. |
 | `unit`, `hostname`, `syslog_identifier` | journald | |
 | `host`, `facility`, `application`, `syslog_identifier` | router syslog | |
 
