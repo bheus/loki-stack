@@ -215,27 +215,33 @@ docker compose up -d --remove-orphans
 `--remove-orphans` is what stops the old `promtail` container, since the service
 no longer exists in the compose file.
 
-**Expect a one-time burst of duplicate container logs.** Alloy keeps its own read
-positions under `/var/lib/alloy/data` (the `loki-stack_alloy-data` volume) and
-cannot inherit Promtail's. With no position recorded, `loki.source.docker` asks
-the Docker API for each container's logs `since=0` and re-ships everything the
-host still has on disk. Loki rejects anything older than
-`reject_old_samples_max_age` (7 days by default), so the duplicates are bounded
-by that — but within that window they are real duplicates, and because the new
-entries carry the same labels they will interleave with the originals.
+**Expect a one-time burst of duplicate container logs, roughly one hour deep.**
+Alloy keeps its own read positions under `/var/lib/alloy/data` (the
+`loki-stack_alloy-data` volume) and cannot inherit Promtail's. With no position
+recorded, `loki.source.docker` asks the Docker API for each container's logs
+`since=0` and re-ships everything the host still has on disk.
 
-To see how much is at stake before you cut over:
+Almost all of that is rejected on arrival. Loki computes an out-of-order cutoff
+per stream of `highestTs - max_chunk_age/2` (`pkg/ingester/stream.go`), which is
+one hour with the default 2h `max_chunk_age`. Because the labels above are
+unchanged, Alloy writes into the same streams Promtail was filling, whose newest
+entry is from seconds ago — so only the last hour or so per container can land
+as a duplicate. `reject_old_samples_max_age` never becomes the binding limit.
 
-```bash
-docker inspect --format '{{.Name}} {{.HostConfig.LogConfig.Config}}' $(docker ps -q)
-du -sh /var/lib/docker/containers/*/*-json.log | sort -h | tail
-```
+For the first minute or two after cutover, Alloy logs a burst of HTTP 400s from
+Loki reading `entry too far behind, oldest acceptable timestamp is: ...`. That is
+the cutoff doing its job. Loki returns 400 rather than 429, so Alloy drops those
+entries instead of retrying, and the burst stops once each container's tail
+catches up.
 
-If that is more than you want to re-ingest, temporarily lower
-`reject_old_samples_max_age` in `limits_config` (for example `5m`), restart Loki,
-start Alloy, then remove the override and restart Loki once Alloy has written its
-positions file. Journald and syslog are unaffected: the journal source is capped
-at `max_age = 12h`, and syslog is a live listener with no backlog.
+Journald and syslog are unaffected: the journal source is capped at
+`max_age = 12h`, and syslog is a live listener with no backlog.
+
+If you ever do need to suppress the duplicates entirely, temporarily lower
+`reject_old_samples_max_age` in `limits_config` (for example `5m`) and restart
+Loki *before* starting Alloy, then remove the override afterwards. Under GitOps
+this costs two extra merges and briefly drops journald backlog, so it is rarely
+worth it.
 
 Once you are satisfied with the cutover, the old positions volume can go:
 
