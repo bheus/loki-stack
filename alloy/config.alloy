@@ -263,4 +263,71 @@ loki.process "syslog" {
 			drop_counter_reason = "hostapd_smps_noise"
 		}
 	}
+
+	// Structured metadata, available since the TSDB/v13 period opened and
+	// allow_structured_metadata was set: per-entry fields that are filterable
+	// without a parser and cost nothing in stream cardinality. These are exactly
+	// the fields that could never be labels — a MAC or a client IP would mint a
+	// stream per device — so until now they were reachable only by regexing the
+	// whole line at query time.
+	//
+	// Nothing here is load-bearing for existing queries: a regex stage that finds
+	// no match leaves the extracted map untouched, and stage.structured_metadata
+	// skips keys the map does not hold, so a line fitting no pattern below simply
+	// carries no metadata and is stored exactly as it is today.
+
+	// usteer logs every probe request with the client MAC and its signal, which is
+	// what makes it the loudest application on the routers. Promoting sta/signal
+	// turns "which AP does this device see, and how strongly" into a metadata
+	// filter instead of a full-text scan over that volume.
+	stage.match {
+		selector = `{application="usteer"}`
+
+		stage.regex {
+			expression = `\bsta=(?P<mac>[0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})`
+		}
+
+		stage.regex {
+			expression = `\bsignal=(?P<signal>-?\d+)`
+		}
+
+		stage.structured_metadata {
+			values = {
+				mac    = "",
+				signal = "",
+			}
+		}
+	}
+
+	// dnsmasq lease traffic: "DHCPACK(br-lan) 192.168.1.246 8a:fd:ea:8b:9d:26 Mac".
+	// Every verb carries the address pair, so take those from all of them.
+	stage.match {
+		selector = `{application=~"dnsmasq.*"}`
+
+		stage.regex {
+			expression = `DHCP\w+\([^)]+\)\s+(?P<client_ip>\d{1,3}(?:\.\d{1,3}){3})\s+(?P<mac>[0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})`
+		}
+
+		// DISCOVER is the one verb with no address yet — it carries only the MAC,
+		// so the pair regex above skips it. Without this, the first packet of every
+		// new lease negotiation would be the one line missing its client MAC.
+		stage.regex {
+			expression = `DHCPDISCOVER\([^)]+\)\s+(?P<mac>[0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})`
+		}
+
+		// Only ACK ends in the client-supplied hostname. NAK and DECLINE put a
+		// human-readable reason in that position ("wrong address"), which would
+		// land prose in client_name if this matched every verb.
+		stage.regex {
+			expression = `DHCPACK\([^)]+\)\s+\S+\s+\S+\s+(?P<client_name>\S+)`
+		}
+
+		stage.structured_metadata {
+			values = {
+				client_ip   = "",
+				mac         = "",
+				client_name = "",
+			}
+		}
+	}
 }
