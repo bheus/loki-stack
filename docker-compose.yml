@@ -44,6 +44,12 @@ services:
       - /etc/alloy/config.alloy
     networks:
       - loki
+      - caddy
+    labels:
+      # Only the UI is proxied. The 1514 syslog listeners stay on published host
+      # ports — routers speak UDP syslog, which a HTTP reverse proxy cannot carry.
+      - "caddy=http://alloy.svc.lan"
+      - "caddy.reverse_proxy={{upstreams 12345}}"
 
   grafana:
     image: grafana/grafana:13.2.1
