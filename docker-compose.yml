@@ -59,6 +59,12 @@ services:
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
     networks:
       - loki
+      - caddy
+    labels:
+      # http:// is explicit: a bare hostname makes Caddy attempt ACME, which
+      # cannot succeed for .lan and leaves the route dead.
+      - "caddy=http://grafana.svc.lan"
+      - "caddy.reverse_proxy={{upstreams 3000}}"
 
 volumes:
   loki-data:
@@ -71,3 +77,8 @@ volumes:
 networks:
   loki:
     driver: bridge
+  # Owned by the caddy stack. External with an explicit name so it resolves to
+  # the one shared network rather than a project-prefixed copy.
+  caddy:
+    external: true
+    name: caddy
