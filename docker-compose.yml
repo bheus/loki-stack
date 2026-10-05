@@ -15,7 +15,7 @@ services:
       - loki
 
   alloy:
-    image: grafana/alloy:v1.19.2
+    image: grafana/alloy:v1.20.1
     container_name: alloy
     restart: unless-stopped
     # Add systemd-journal group for journal access
@@ -52,7 +52,7 @@ services:
       - "caddy.reverse_proxy={{upstreams 12345}}"
 
   grafana:
-    image: grafana/grafana:13.2.2
+    image: grafana/grafana:13.2.3
     container_name: grafana
     restart: unless-stopped
     ports:
