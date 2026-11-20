@@ -3,8 +3,7 @@ updates:
   - package-ecosystem: "docker-compose"
     directory: "/"
     schedule:
-      interval: "weekly"
-      day: "sunday"
+      interval: "monthly"
     commit-message:
       prefix: "deps"
     # loki, alloy and grafana move together here — group them into one PR
